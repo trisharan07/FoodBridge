@@ -1,0 +1,42 @@
+import { Router } from 'express';
+import { q } from '../db.js';
+import { auth } from '../middleware/auth.js';
+
+export default (io) => {
+  const r = Router();
+
+  r.get('/', auth(), async (_req, res) => {
+    const { rows } = await q(
+      `SELECT f.*, u.name AS donor_name FROM food_listings f JOIN users u ON u.id=f.donor_id
+       WHERE f.status='available' AND f.expires_at > now() ORDER BY f.pickup_until ASC`);
+    res.json(rows);
+  });
+
+  r.post('/', auth('donor'), async (req, res) => {
+    const { foodName, quantity, unit, pickupFrom, pickupUntil, expiresAt, address, lat, lng } = req.body;
+    if (!foodName || !(quantity > 0) || !pickupFrom || !pickupUntil || !expiresAt)
+      return res.status(400).json({ error: 'Food name, quantity, pickup window and expiry are required' });
+    if (new Date(pickupUntil) <= new Date(pickupFrom))
+      return res.status(400).json({ error: 'Pickup end must be after pickup start' });
+    const { rows } = await q(
+      `INSERT INTO food_listings(donor_id,food_name,quantity,unit,pickup_from,pickup_until,expires_at,address,lat,lng)
+       VALUES($1,$2,$3,COALESCE($4,'servings'),$5,$6,$7,$8,$9,$10) RETURNING *`,
+      [req.user.id, foodName, quantity, unit, pickupFrom, pickupUntil, expiresAt, address, lat, lng]);
+    await q('INSERT INTO audit_logs(user_id,action,entity,entity_id) VALUES($1,$2,$3,$4)',
+      [req.user.id, 'listing.create', 'food_listing', rows[0].id]);
+    io.to('ngo').emit('donation:new', rows[0]);
+    res.status(201).json(rows[0]);
+  });
+
+  // The WHERE status='available' makes this safe if two NGOs click at once.
+  r.post('/:id/claim', auth('ngo'), async (req, res) => {
+    const upd = await q(
+      `UPDATE food_listings SET status='claimed' WHERE id=$1 AND status='available' RETURNING *`, [req.params.id]);
+    if (!upd.rows[0]) return res.status(409).json({ error: 'This donation was already claimed' });
+    const p = await q('INSERT INTO pickups(listing_id,ngo_id) VALUES($1,$2) RETURNING *', [req.params.id, req.user.id]);
+    io.to('volunteer').emit('pickup:open', p.rows[0]);
+    io.to(`user:${upd.rows[0].donor_id}`).emit('donation:claimed', upd.rows[0]);
+    res.status(201).json(p.rows[0]);
+  });
+  return r;
+};

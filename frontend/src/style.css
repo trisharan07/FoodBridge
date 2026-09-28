@@ -1,0 +1,18 @@
+:root { --green:#2f7d4f; --orange:#c96a1f; --slate:#26323a; --bg:#fbfaf6; --line:#dfe3dc; }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--slate); font-family:'Nunito Sans',system-ui,sans-serif; }
+h1,h2 { font-family:Fraunces,Georgia,serif; margin:0 0 .5rem; }
+header { display:flex; justify-content:space-between; align-items:center; padding:1rem 1.5rem; background:var(--green); color:#fff; }
+header h1 { font-size:1.5rem; margin:0; }
+main { max-width:860px; margin:1.5rem auto; padding:0 1rem; display:grid; gap:1.5rem; }
+.panel { background:#fff; border:1px solid var(--line); border-radius:10px; padding:1.25rem; }
+form { display:grid; gap:.6rem; max-width:420px; }
+label { display:grid; gap:.2rem; font-size:.9rem; }
+input, select { padding:.55rem; border:1px solid var(--line); border-radius:6px; font:inherit; }
+input:focus-visible, select:focus-visible, button:focus-visible { outline:2px solid var(--orange); outline-offset:2px; }
+button { padding:.6rem 1rem; border:0; border-radius:6px; background:var(--orange); color:#fff; font:inherit; font-weight:600; cursor:pointer; }
+button.ghost { background:transparent; border:1px solid #fff; margin-left:.5rem; }
+.item { display:flex; justify-content:space-between; align-items:center; gap:1rem; padding:.75rem 0; border-top:1px solid var(--line); }
+.muted { color:#5d6a73; font-size:.9rem; }
+.error { color:#b3261e; }
+.toast { position:fixed; bottom:1rem; right:1rem; background:var(--slate); color:#fff; padding:.75rem 1rem; border-radius:8px; }
