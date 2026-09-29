@@ -12,6 +12,7 @@ import pickupRoutes from './routes/pickups.js';
 import adminRoutes from './routes/admin.js';
 import trackingRoutes from './routes/tracking.js';
 import freshnessRoutes from './routes/freshness.js';
+import notificationRoutes from './routes/notifications.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -41,6 +42,7 @@ app.use('/api/pickups', pickupRoutes(io));
 app.use('/api/admin', adminRoutes(io));
 app.use('/api/tracking', trackingRoutes(io));
 app.use('/api/freshness', freshnessRoutes());
+app.use('/api/notifications', notificationRoutes());
 
 const port = process.env.PORT || 4000;
 server.listen(port, () => console.log(`FoodBridge API on :${port}`));

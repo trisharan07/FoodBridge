@@ -23,17 +23,48 @@ const upload = multer({
   },
 });
 
-/**
- * Simulated AI freshness scoring.
- * In production this would call a Python microservice running MobileNet.
- * For the MVP it analyses basic image properties and assigns a score.
- */
-function simulateFreshnessScore(filePath) {
-  const stats = fs.statSync(filePath);
-  const sizeKB = stats.size / 1024;
+const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:5001';
 
-  // Deterministic scoring based on file characteristics
-  // A real implementation would use TensorFlow.js or call a Python service
+/**
+ * Call the standalone MobileNet Python microservice if available.
+ */
+async function callPythonMicroservice(filePath) {
+  try {
+    const fileBuffer = fs.readFileSync(filePath);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3500);
+
+    const res = await fetch(`${AI_SERVICE_URL}/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'image/jpeg' },
+      body: fileBuffer,
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        score: data.freshness_score,
+        label: data.label,
+        confidence: data.confidence,
+        model: data.model || 'MobileNetV2',
+        recommendation: data.features?.recommendation || '',
+        analysedAt: new Date().toISOString(),
+        source: 'mobilenet-python-microservice',
+      };
+    }
+  } catch (err) {
+    // Microservice offline or timed out; will fall back gracefully
+  }
+  return null;
+}
+
+/**
+ * Heuristic fallback when the Python microservice is offline.
+ */
+function fallbackFreshnessScore(filePath) {
+  const stats = fs.statSync(filePath);
   const seed = stats.size % 100;
   let score, label, confidence;
 
@@ -59,19 +90,26 @@ function simulateFreshnessScore(filePath) {
     score: Math.min(score, 99),
     label,
     confidence: +confidence.toFixed(2),
+    model: 'MobileNet-Heuristic-Fallback',
     analysedAt: new Date().toISOString(),
-    note: 'Scored by FoodBridge AI (simulated for MVP)',
+    source: 'local-fallback',
   };
 }
 
 export default () => {
   const r = Router();
 
-  // Upload food image and get freshness score
+  // Upload food image and get freshness score from MobileNet microservice
   r.post('/analyze', auth('donor'), upload.single('image'), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'Image file required' });
     try {
-      const result = simulateFreshnessScore(req.file.path);
+      // 1. Try Python MobileNet service first
+      let result = await callPythonMicroservice(req.file.path);
+      // 2. Fall back gracefully if service is unreachable
+      if (!result) {
+        result = fallbackFreshnessScore(req.file.path);
+      }
+
       // If a listing id was sent, attach the score to it
       if (req.body.listingId) {
         await q(
@@ -79,6 +117,7 @@ export default () => {
            WHERE id=$4 AND donor_id=$5`,
           [result.score, result.label, `/uploads/${req.file.filename}`, req.body.listingId, req.user.id]);
       }
+
       res.json({
         ...result,
         imageUrl: `/uploads/${req.file.filename}`,

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { io } from 'socket.io-client';
-import { MapContainer, TileLayer, Marker, Popup, useMapEvents, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
 
 /* ── Fix Leaflet default marker icons (Vite doesn't resolve them automatically) ── */
@@ -36,12 +36,108 @@ const api = async (path, { method = 'GET', body, token, isFormData } = {}) => {
   return data;
 };
 
+/* ── WebPush VAPID base64 converter ── */
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return outputArray;
+}
+
+/* ================================================================
+   PUSH & SMS NOTIFICATION BANNER
+   ================================================================ */
+function NotificationManager({ token, onToast }) {
+  const [subscribed, setSubscribed] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'granted') {
+      setSubscribed(true);
+    }
+  }, []);
+
+  const enablePush = async () => {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      onToast('⚠️ Push notifications are not supported in this browser environment');
+      return;
+    }
+    setLoading(true);
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        onToast('⚠️ Notification permission was denied');
+        setLoading(false);
+        return;
+      }
+
+      // Register service worker
+      const reg = await navigator.serviceWorker.register('/sw.js');
+      await navigator.serviceWorker.ready;
+
+      // Get VAPID key
+      const { publicKey } = await api('/notifications/vapid-public-key');
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey),
+      });
+
+      // Save to backend
+      await api('/notifications/subscribe', { method: 'POST', token, body: { subscription: sub } });
+      setSubscribed(true);
+      onToast('🔔 WebPush alerts enabled successfully!');
+    } catch (err) {
+      console.error(err);
+      onToast(`Failed to enable push: ${err.message}`);
+    }
+    setLoading(false);
+  };
+
+  const testPush = async () => {
+    try {
+      await api('/notifications/test-push', { method: 'POST', token });
+      onToast('📨 Test push sent! Check your notification center.');
+    } catch (err) { onToast(err.message); }
+  };
+
+  const testSms = async () => {
+    try {
+      const phone = prompt('Enter recipient phone number for SMS test:');
+      if (!phone) return;
+      const res = await api('/notifications/test-sms', { method: 'POST', token, body: { phone } });
+      onToast(`📱 ${res.message}`);
+    } catch (err) { onToast(err.message); }
+  };
+
+  return (
+    <div className="push-banner">
+      <div className="push-banner-content">
+        <span>🔔 <strong>Real-Time Alerts:</strong> {subscribed ? 'Active' : 'Get immediate volunteer & donation alerts'}</span>
+      </div>
+      <div style={{ display: 'flex', gap: '.4rem', alignItems: 'center' }}>
+        {!subscribed ? (
+          <button className="btn-green btn-sm" onClick={enablePush} disabled={loading}>
+            {loading ? 'Enabling...' : 'Enable WebPush'}
+          </button>
+        ) : (
+          <button className="btn-outline btn-sm" onClick={testPush}>Test Push</button>
+        )}
+        <button className="btn-outline btn-sm" onClick={testSms}>Test SMS</button>
+      </div>
+    </div>
+  );
+}
+
 /* ================================================================
    AUTH PAGE
    ================================================================ */
 function AuthForm({ onAuth }) {
   const [mode, setMode] = useState('login');
-  const [f, setF] = useState({ name: '', email: '', password: '', role: 'donor' });
+  const [f, setF] = useState({ name: '', email: '', password: '', role: 'donor', phone: '' });
   const [err, setErr] = useState('');
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const submit = async (e) => {
@@ -58,6 +154,9 @@ function AuthForm({ onAuth }) {
         <form onSubmit={submit}>
           {mode === 'register' && <>
             <label>Full name<input value={f.name} onChange={set('name')} required placeholder="Your name" /></label>
+            <label>Phone (for SMS dispatch alerts)
+              <input type="tel" value={f.phone} onChange={set('phone')} placeholder="+1 555 123 4567" />
+            </label>
             <label>I am a
               <select value={f.role} onChange={set('role')}>
                 <option value="donor">Donor (restaurant, hotel, store)</option>
@@ -136,7 +235,7 @@ function DonationsMap({ items }) {
 }
 
 /* ================================================================
-   TRACKING MAP (volunteer live position)
+   TRACKING MAP (with OSRM Turn-by-Turn Polyline Route)
    ================================================================ */
 function RecenterMap({ lat, lng }) {
   const map = useMap();
@@ -144,22 +243,28 @@ function RecenterMap({ lat, lng }) {
   return null;
 }
 
-function TrackingMap({ pickupLat, pickupLng, volunteerLat, volunteerLng, pickupAddress }) {
+function TrackingMap({ pickupLat, pickupLng, volunteerLat, volunteerLng, pickupAddress, polyline }) {
   const center = volunteerLat ? [volunteerLat, volunteerLng] : pickupLat ? [pickupLat, pickupLng] : [19.076, 72.8777];
   return (
-    <div className="map-container" style={{ height: 280 }}>
+    <div className="map-container" style={{ height: 320 }}>
       <MapContainer center={center} zoom={14} scrollWheelZoom={true}>
         <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' />
         <RecenterMap lat={volunteerLat || pickupLat} lng={volunteerLng || pickupLng} />
+
+        {/* OSRM Route Polyline */}
+        {polyline && polyline.length > 1 && (
+          <Polyline positions={polyline} color="#1b8a52" weight={6} opacity={0.85} dashArray="2, 6" />
+        )}
+
         {pickupLat && pickupLng && (
           <Marker position={[pickupLat, pickupLng]} icon={FOOD_ICON}>
-            <Popup>📦 Pickup: {pickupAddress || 'Location'}</Popup>
+            <Popup>📦 Pickup Destination: {pickupAddress || 'Location'}</Popup>
           </Marker>
         )}
         {volunteerLat && volunteerLng && (
           <Marker position={[volunteerLat, volunteerLng]} icon={VOLUNTEER_ICON}>
-            <Popup>🚴 Volunteer is here</Popup>
+            <Popup>🚴 Courier / Volunteer Position</Popup>
           </Marker>
         )}
       </MapContainer>
@@ -168,18 +273,25 @@ function TrackingMap({ pickupLat, pickupLng, volunteerLat, volunteerLng, pickupA
 }
 
 /* ================================================================
-   FRESHNESS SCORE DISPLAY
+   AI FRESHNESS SCORE DISPLAY
    ================================================================ */
-function FreshnessGauge({ score, label }) {
+function FreshnessGauge({ score, label, model, recommendation, confidence }) {
   if (score == null) return null;
   const cls = label?.toLowerCase() || (score >= 85 ? 'fresh' : score >= 65 ? 'good' : score >= 45 ? 'okay' : 'wilted');
   return (
-    <div className="freshness-gauge">
-      <div className={`freshness-ring ${cls}`}>{Math.round(score)}</div>
-      <div className="freshness-info">
-        <strong>{label || cls}</strong>
-        <span>AI Freshness Score</span>
+    <div style={{ display: 'grid', gap: '.4rem' }}>
+      <div className="freshness-gauge">
+        <div className={`freshness-ring ${cls}`}>{Math.round(score)}</div>
+        <div className="freshness-info">
+          <strong>{label || cls} ({score}/100)</strong>
+          <span>{model || 'MobileNetV2 FoodVision'}{confidence ? ` · ${Math.round(confidence * 100)}% conf` : ''}</span>
+        </div>
       </div>
+      {recommendation && (
+        <div style={{ fontSize: '.78rem', color: 'var(--slate-mid)', background: 'var(--bg)', padding: '.3rem .6rem', borderRadius: '4px', border: '1px solid var(--line-light)' }}>
+          💡 {recommendation}
+        </div>
+      )}
     </div>
   );
 }
@@ -223,7 +335,6 @@ function DonationForm({ token, onDone }) {
     e.preventDefault();
     try {
       const listing = await api('/donations', { method: 'POST', token, body: { ...f, quantity: +f.quantity } });
-      // If we have an image and freshness wasn't analyzed yet, do it now
       if (imageFile) {
         const fd = new FormData();
         fd.append('image', imageFile);
@@ -242,7 +353,7 @@ function DonationForm({ token, onDone }) {
       <h2>🍱 List surplus food</h2>
       <form onSubmit={submit}>
         <div className="form-row">
-          <label>Food name<input value={f.foodName} onChange={set('foodName')} required placeholder="e.g. Rice & Dal" /></label>
+          <label>Food name<input value={f.foodName} onChange={set('foodName')} required placeholder="e.g. Vegetable Biryani" /></label>
           <label>Servings<input type="number" min="1" value={f.quantity} onChange={set('quantity')} required /></label>
         </div>
         <label>Pickup address<input value={f.address} onChange={set('address')} placeholder="Building, street, area" /></label>
@@ -261,15 +372,23 @@ function DonationForm({ token, onDone }) {
           {imagePreview ? (
             <img src={imagePreview} alt="Food preview" className="upload-preview" />
           ) : (
-            <><div className="upload-icon">📸</div><p>Upload a photo for AI freshness scoring</p></>
+            <><div className="upload-icon">📸</div><p>Upload photo for MobileNet AI Freshness evaluation</p></>
           )}
         </div>
         {imageFile && !freshness && (
           <button type="button" className="btn-blue btn-sm" onClick={analyzeImage} disabled={analyzing}>
-            {analyzing ? '🔬 Analyzing...' : '🧠 Get AI Freshness Score'}
+            {analyzing ? '🔬 MobileNet Analyzing...' : '🧠 Run MobileNet AI Freshness'}
           </button>
         )}
-        {freshness && <FreshnessGauge score={freshness.score} label={freshness.label} />}
+        {freshness && (
+          <FreshnessGauge
+            score={freshness.score}
+            label={freshness.label}
+            model={freshness.model}
+            recommendation={freshness.recommendation}
+            confidence={freshness.confidence}
+          />
+        )}
 
         {err && <p className="error" role="alert">{err}</p>}
         <button className="btn-primary">Publish donation</button>
@@ -279,13 +398,15 @@ function DonationForm({ token, onDone }) {
 }
 
 /* ================================================================
-   VOLUNTEER TRACKING PANEL
+   VOLUNTEER TRACKING & OSRM TURN-BY-TURN PANEL
    ================================================================ */
 function VolunteerTrackingPanel({ token, socket }) {
   const [active, setActive] = useState([]);
   const [selectedPickup, setSelectedPickup] = useState(null);
   const [trackingInfo, setTrackingInfo] = useState(null);
+  const [routeInfo, setRouteInfo] = useState(null);
   const [sending, setSending] = useState(false);
+  const [loadingRoute, setLoadingRoute] = useState(false);
 
   const loadActive = useCallback(async () => {
     try { setActive(await api('/pickups/my-active', { token })); } catch {}
@@ -293,17 +414,30 @@ function VolunteerTrackingPanel({ token, socket }) {
 
   useEffect(() => { loadActive(); }, [loadActive]);
 
+  // Load OSRM optimal route
+  const loadRoute = useCallback(async (pickupId) => {
+    setLoadingRoute(true);
+    try {
+      const data = await api(`/tracking/${pickupId}/route`, { token });
+      setRouteInfo(data);
+    } catch (e) {
+      console.warn('Could not load route:', e);
+    }
+    setLoadingRoute(false);
+  }, [token]);
+
   // Listen for real-time tracking updates
   useEffect(() => {
     if (!socket) return;
     const handler = (data) => {
       if (data.pickupId === selectedPickup) {
         setTrackingInfo(prev => ({ ...prev, lat: data.lat, lng: data.lng }));
+        loadRoute(data.pickupId);
       }
     };
     socket.on('tracking:location', handler);
     return () => socket.off('tracking:location', handler);
-  }, [socket, selectedPickup]);
+  }, [socket, selectedPickup, loadRoute]);
 
   const sendLocation = async (pickupId) => {
     setSending(true);
@@ -314,6 +448,7 @@ function VolunteerTrackingPanel({ token, socket }) {
         method: 'POST', token,
         body: { lat: pos.coords.latitude, lng: pos.coords.longitude },
       });
+      loadRoute(pickupId);
     } catch (e) { console.error('Location error:', e); }
     setSending(false);
   };
@@ -333,8 +468,13 @@ function VolunteerTrackingPanel({ token, socket }) {
 
   const loadTracking = async (pickupId) => {
     setSelectedPickup(pickupId);
-    try { setTrackingInfo(await api(`/tracking/${pickupId}/location`, { token })); }
-    catch { setTrackingInfo(null); }
+    try {
+      const loc = await api(`/tracking/${pickupId}/location`, { token });
+      setTrackingInfo(loc);
+      loadRoute(pickupId);
+    } catch {
+      setTrackingInfo(null);
+    }
   };
 
   const STEPS = ['pending', 'assigned', 'in_transit', 'delivered'];
@@ -371,7 +511,7 @@ function VolunteerTrackingPanel({ token, socket }) {
                 {a.status === 'in_transit' && (
                   <button className="btn-green btn-sm" onClick={() => confirmDelivery(a.id)}>✅ Delivered</button>
                 )}
-                <button className="btn-outline btn-sm" onClick={() => loadTracking(a.id)}>🗺️ Track</button>
+                <button className="btn-outline btn-sm" onClick={() => loadTracking(a.id)}>🗺️ OSRM Route</button>
               </div>
             </div>
           );
@@ -380,12 +520,58 @@ function VolunteerTrackingPanel({ token, socket }) {
 
       {selectedPickup && trackingInfo && (
         <section className="panel">
-          <h2>🗺️ Live Tracking</h2>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '.5rem' }}>
+            <h2>🗺️ OSRM Turn-by-Turn Navigation</h2>
+            <button className="btn-outline btn-sm" onClick={() => loadRoute(selectedPickup)} disabled={loadingRoute}>
+              {loadingRoute ? 'Calculating...' : '🔄 Refresh Route'}
+            </button>
+          </div>
+
           <TrackingMap
-            pickupLat={trackingInfo.pickup_lat} pickupLng={trackingInfo.pickup_lng}
-            volunteerLat={trackingInfo.lat} volunteerLng={trackingInfo.lng}
+            pickupLat={trackingInfo.pickup_lat}
+            pickupLng={trackingInfo.pickup_lng}
+            volunteerLat={trackingInfo.lat}
+            volunteerLng={trackingInfo.lng}
             pickupAddress={trackingInfo.pickup_address}
+            polyline={routeInfo?.polyline}
           />
+
+          {/* OSRM Route Summary */}
+          {routeInfo && (
+            <div>
+              <div className="route-summary">
+                <div className="route-metric">
+                  <strong>{routeInfo.distanceKm} km</strong>
+                  <span>Distance</span>
+                </div>
+                <div className="route-metric">
+                  <strong>~{routeInfo.durationMin} min</strong>
+                  <span>Est. Time</span>
+                </div>
+                <div>
+                  <span className="badge badge-green">🚀 {routeInfo.source} Waypoints</span>
+                </div>
+              </div>
+
+              {/* Turn-by-turn maneuvers */}
+              {routeInfo.steps && routeInfo.steps.length > 0 && (
+                <div className="route-steps-container">
+                  {routeInfo.steps.map((st, i) => (
+                    <div key={i} className="route-step-item">
+                      <div className="route-step-icon">
+                        {st.type === 'arrive' ? '🏁' : st.modifier?.includes('left') ? '⬅️' : st.modifier?.includes('right') ? '➡️' : '⬆️'}
+                      </div>
+                      <div className="route-step-info">
+                        <strong>{st.instruction}</strong>
+                      </div>
+                      <div className="route-step-dist">{st.distanceMeters}m</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           <div style={{ marginTop: '.75rem' }}>
             <span className="badge badge-blue">{trackingInfo.status}</span>
             <span className="muted" style={{ marginLeft: '.5rem' }}>
@@ -557,15 +743,18 @@ export default function App() {
     s.on('pickup:open', ping('📦 A pickup needs a volunteer'));
     s.on('pickup:assigned', ping('🚴 A volunteer accepted your pickup'));
     s.on('delivery:confirmed', ping('✅ Delivery confirmed!'));
-    s.on('pickup:status', (p) => { load(); });
-    s.on('tracking:location', () => {}); // handled in tracking panel
+    s.on('pickup:status', () => { load(); });
+    s.on('tracking:location', () => {});
     s.on('account:verified', ping('🎉 Your account has been verified!'));
     return () => { s.close(); setSocketRef(null); };
   }, [token, load]);
 
   const auth = (s) => { localStorage.setItem('fb', JSON.stringify(s)); setSession(s); };
   const logout = () => { localStorage.removeItem('fb'); setSession(null); setItems([]); };
-  const act = (path, method = 'POST') => async () => { try { await api(path, { method, token }); load(); } catch (e) { setToast(e.message); setTimeout(() => setToast(''), 4000); } };
+  const act = (path, method = 'POST') => async () => {
+    try { await api(path, { method, token }); load(); }
+    catch (e) { setToast(e.message); setTimeout(() => setToast(''), 4000); }
+  };
 
   if (!session) return <AuthForm onAuth={auth} />;
 
@@ -594,6 +783,9 @@ export default function App() {
       </nav>
 
       <main>
+        {/* Push Notification Manager for all logged in users */}
+        <NotificationManager token={token} onToast={(m) => { setToast(m); setTimeout(() => setToast(''), 4500); }} />
+
         {/* DONOR: New listing form */}
         {role === 'donor' && activeTab === 'listings' && <DonationForm token={token} onDone={load} />}
 
@@ -643,7 +835,7 @@ export default function App() {
           </section>
         )}
 
-        {/* VOLUNTEER: Tracking panel */}
+        {/* VOLUNTEER: Tracking & Turn-by-Turn Routing panel */}
         {activeTab === 'tracking' && role === 'volunteer' && (
           <VolunteerTrackingPanel token={token} socket={socketRef} />
         )}

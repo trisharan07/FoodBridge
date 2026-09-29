@@ -378,32 +378,44 @@ FoodBridge/
 │   │   │   ├── admin.js        # Admin verification & KPI routes
 │   │   │   ├── auth.js         # User registration & JWT auth
 │   │   │   ├── donations.js    # Food listings & Haversine proximity
-│   │   │   ├── freshness.js    # Multer upload & AI freshness model
+│   │   │   ├── freshness.js    # Multer upload & MobileNet bridge
+│   │   │   ├── notifications.js# WebPush VAPID & SMS dispatcher
 │   │   │   ├── pickups.js      # Assignment & status state engine
-│   │   │   └── tracking.js     # Live volunteer GPS & delivery logs
+│   │   │   └── tracking.js     # OSRM turn-by-turn routing & live GPS
+│   │   ├── services/
+│   │   │   └── notificationService.js # WebPush & SMS integration
 │   │   ├── db.js               # PostgreSQL pool connection
 │   │   └── server.js           # Express setup + Socket.IO server
 │   ├── uploads/                # Food imagery storage
 │   └── package.json
 │
 ├── frontend/
+│   ├── public/
+│   │   └── sw.js               # Service Worker for WebPush alerts
 │   ├── src/
-│   │   ├── App.jsx             # Unified SPA with dynamic role views
+│   │   ├── App.jsx             # Unified SPA with role views & OSRM maps
 │   │   ├── main.jsx            # React root mount
 │   │   └── style.css           # Premium design tokens & responsive CSS
 │   ├── index.html              # HTML5 entry with fonts & meta tags
 │   ├── vite.config.js          # Vite config & API/Socket proxying
 │   └── package.json
 │
+├── ml-service/                 # MobileNet AI Python Microservice
+│   ├── app.py                  # Standalone classification HTTP microservice
+│   ├── requirements.txt        # PyTorch, TorchVision, Pillow dependencies
+│   └── Dockerfile              # Containerized ML inference runtime
+│
 ├── database/
 │   ├── schema.sql              # Initial 8-table relational schema
-│   └── migration_v2.sql        # v2 schema updates (tracking, admin, AI)
+│   ├── migration_v2.sql        # v2 schema updates (tracking, admin, AI)
+│   └── migration_v3.sql        # v3 schema updates (push subscriptions, SMS)
 │
 ├── docs/
 │   └── images/
 │       └── banner.jpg          # FoodBridge visual illustration
 │
-└── docker-compose.yml          # Containerized PostgreSQL service
+└── docker-compose.yml          # PostgreSQL & MobileNet AI Microservice
+
 ```
 
 ---
@@ -415,10 +427,11 @@ FoodBridge/
 - [x] **Delivery Tracking**: Volunteer GPS pinging, real-time Socket.IO broadcasts.
 - [x] **Admin Governance**: Verification workflows and system health analytics.
 - [x] **AI Freshness Scoring**: Image analysis pipeline and visual status gauges.
-- [ ] **MobileNet Python Microservice**: Standalone TensorFlow/PyTorch classification microservice.
-- [ ] **Turn-by-Turn Route Optimization**: OSRM (Open Source Routing Machine) waypoint routing.
-- [ ] **Push Notifications**: WebPush & SMS integration for immediate volunteer alerts.
+- [x] **MobileNet Python Microservice**: Standalone classification microservice (`ml-service/`).
+- [x] **Turn-by-Turn Route Optimization**: OSRM (Open Source Routing Machine) waypoint routing.
+- [x] **Push Notifications**: WebPush (VAPID/ServiceWorker) & SMS integration for immediate volunteer alerts.
 - [ ] **Cloud Deployment**: AWS ECS / EC2 container deployment with Amazon RDS PostgreSQL & S3 bucket assets.
+
 
 ---
 

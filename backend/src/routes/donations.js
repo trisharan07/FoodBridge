@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { q } from '../db.js';
 import { auth } from '../middleware/auth.js';
+import { sendPushToRole, sendPushToUser, alertVolunteersViaSms } from '../services/notificationService.js';
 
 export default (io) => {
   const r = Router();
@@ -44,7 +45,16 @@ export default (io) => {
       [req.user.id, foodName, quantity, unit, pickupFrom, pickupUntil, expiresAt, address, lat, lng]);
     await q('INSERT INTO audit_logs(user_id,action,entity,entity_id) VALUES($1,$2,$3,$4)',
       [req.user.id, 'listing.create', 'food_listing', rows[0].id]);
+
     io.to('ngo').emit('donation:new', rows[0]);
+
+    // Dispatch WebPush to NGOs
+    sendPushToRole('ngo', {
+      title: '🍱 New Food Donation Available!',
+      body: `${rows[0].food_name} (${rows[0].quantity} servings) posted by nearby donor.`,
+      url: '/',
+    });
+
     res.status(201).json(rows[0]);
   });
 
@@ -54,8 +64,25 @@ export default (io) => {
       `UPDATE food_listings SET status='claimed' WHERE id=$1 AND status='available' RETURNING *`, [req.params.id]);
     if (!upd.rows[0]) return res.status(409).json({ error: 'This donation was already claimed' });
     const p = await q('INSERT INTO pickups(listing_id,ngo_id) VALUES($1,$2) RETURNING *', [req.params.id, req.user.id]);
+
     io.to('volunteer').emit('pickup:open', p.rows[0]);
     io.to(`user:${upd.rows[0].donor_id}`).emit('donation:claimed', upd.rows[0]);
+
+    // Send WebPush to Donor that food was claimed
+    sendPushToUser(upd.rows[0].donor_id, {
+      title: '🍽️ Your Donation Has Been Claimed!',
+      body: `An NGO has claimed "${upd.rows[0].food_name}". A volunteer will be dispatched soon.`,
+      url: '/',
+    });
+
+    // Alert Volunteers via WebPush & SMS
+    sendPushToRole('volunteer', {
+      title: '🚴 New Food Delivery Needed!',
+      body: `Pickup ready for "${upd.rows[0].food_name}" (${upd.rows[0].quantity} servings).`,
+      url: '/',
+    });
+    alertVolunteersViaSms(upd.rows[0]);
+
     res.status(201).json(p.rows[0]);
   });
   return r;
