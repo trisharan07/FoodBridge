@@ -1,0 +1,74 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-foodbridge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-foodbridge_secure_pass_2026}
+      POSTGRES_DB: ${POSTGRES_DB:-foodbridge}
+    volumes:
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./database/migration_v2.sql:/docker-entrypoint-initdb.d/02_migration_v2.sql:ro
+      - ./database/migration_v3.sql:/docker-entrypoint-initdb.d/03_migration_v3.sql:ro
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-foodbridge} -d ${POSTGRES_DB:-foodbridge}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: always
+    environment:
+      PORT: 4000
+      DATABASE_URL: postgres://${POSTGRES_USER:-foodbridge}:${POSTGRES_PASSWORD:-foodbridge_secure_pass_2026}@db:5432/${POSTGRES_DB:-foodbridge}
+      JWT_SECRET: ${JWT_SECRET:-foodbridge_jwt_secret_production_key_xyz}
+      CLIENT_ORIGIN: ${CLIENT_ORIGIN:-*}
+      AI_SERVICE_URL: http://ai-service:5001
+      VAPID_EMAIL: ${VAPID_EMAIL:-mailto:admin@foodbridge.local}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_PHONE_NUMBER: ${TWILIO_PHONE_NUMBER:-}
+    volumes:
+      - uploads_data:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+
+  ai-service:
+    build:
+      context: ./ml-service
+      dockerfile: Dockerfile
+    restart: always
+    environment:
+      PORT: 5001
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: always
+
+  nginx:
+    image: nginx:alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - certbot_data:/var/www/certbot:ro
+      - certbot_certs:/etc/letsencrypt:ro
+    depends_on:
+      - frontend
+      - backend
+      - ai-service
+
+volumes:
+  pgdata:
+  uploads_data:
+  certbot_data:
+  certbot_certs:
