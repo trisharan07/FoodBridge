@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import { q } from '../db.js';
 import { sign } from '../middleware/auth.js';
 const r = Router();
-const ROLES = ['donor', 'ngo', 'volunteer'];
+const ROLES = ['donor', 'ngo', 'volunteer', 'admin'];
 
 r.post('/register', async (req, res) => {
   const { name, email, password, role, phone } = req.body;
@@ -12,7 +12,7 @@ r.post('/register', async (req, res) => {
   try {
     const hash = await bcrypt.hash(password, 10);
     const { rows } = await q(
-      'INSERT INTO users(name,email,phone,role,password_hash) VALUES($1,$2,$3,$4,$5) RETURNING id,name,email,role',
+      'INSERT INTO users(name,email,phone,role,password_hash) VALUES($1,$2,$3,$4,$5) RETURNING id,name,email,role,is_verified',
       [name, email.toLowerCase(), phone, role, hash]);
     res.status(201).json({ user: rows[0], token: sign(rows[0]) });
   } catch (e) {
@@ -27,6 +27,6 @@ r.post('/login', async (req, res) => {
   const u = rows[0];
   if (!u || !(await bcrypt.compare(password || '', u.password_hash)))
     return res.status(401).json({ error: 'Wrong email or password' });
-  res.json({ user: { id: u.id, name: u.name, email: u.email, role: u.role }, token: sign(u) });
+  res.json({ user: { id: u.id, name: u.name, email: u.email, role: u.role, is_verified: u.is_verified }, token: sign(u) });
 });
 export default r;

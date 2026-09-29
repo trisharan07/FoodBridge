@@ -5,10 +5,30 @@ import { auth } from '../middleware/auth.js';
 export default (io) => {
   const r = Router();
 
-  r.get('/', auth(), async (_req, res) => {
+  // List available donations with lat/lng for map display
+  r.get('/', auth(), async (req, res) => {
     const { rows } = await q(
       `SELECT f.*, u.name AS donor_name FROM food_listings f JOIN users u ON u.id=f.donor_id
        WHERE f.status='available' AND f.expires_at > now() ORDER BY f.pickup_until ASC`);
+    res.json(rows);
+  });
+
+  // Nearby donations within a radius (km), using Haversine approximation
+  r.get('/nearby', auth(), async (req, res) => {
+    const { lat, lng, radius = 10 } = req.query;
+    if (!lat || !lng) return res.status(400).json({ error: 'lat and lng query params required' });
+    const { rows } = await q(
+      `SELECT f.*, u.name AS donor_name,
+              (6371 * acos(cos(radians($1)) * cos(radians(f.lat)) *
+               cos(radians(f.lng) - radians($2)) + sin(radians($1)) *
+               sin(radians(f.lat)))) AS distance_km
+       FROM food_listings f JOIN users u ON u.id=f.donor_id
+       WHERE f.status='available' AND f.expires_at > now()
+         AND f.lat IS NOT NULL AND f.lng IS NOT NULL
+       HAVING (6371 * acos(cos(radians($1)) * cos(radians(f.lat)) *
+               cos(radians(f.lng) - radians($2)) + sin(radians($1)) *
+               sin(radians(f.lat)))) < $3
+       ORDER BY distance_km`, [lat, lng, radius]);
     res.json(rows);
   });
 

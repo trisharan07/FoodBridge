@@ -7,8 +7,28 @@ export default (io) => {
 
   r.get('/open', auth('volunteer'), async (_req, res) => {
     const { rows } = await q(
-      `SELECT p.id, p.status, f.food_name, f.quantity, f.address FROM pickups p
-       JOIN food_listings f ON f.id=p.listing_id WHERE p.status='pending' ORDER BY p.created_at`);
+      `SELECT p.id, p.status, f.food_name, f.quantity, f.address, f.lat, f.lng,
+              u.name AS ngo_name
+       FROM pickups p
+       JOIN food_listings f ON f.id=p.listing_id
+       JOIN users u ON u.id=p.ngo_id
+       WHERE p.status='pending' ORDER BY p.created_at`);
+    res.json(rows);
+  });
+
+  // Get my active assignments (for volunteer tracking view)
+  r.get('/my-active', auth('volunteer'), async (req, res) => {
+    const { rows } = await q(
+      `SELECT p.id, p.status, p.ngo_id, f.food_name, f.quantity, f.address, f.lat, f.lng,
+              va.current_lat, va.current_lng, va.assigned_at,
+              n.name AS ngo_name, d.name AS donor_name
+       FROM pickups p
+       JOIN volunteer_assignments va ON va.pickup_id = p.id
+       JOIN food_listings f ON f.id = p.listing_id
+       JOIN users n ON n.id = p.ngo_id
+       JOIN users d ON d.id = f.donor_id
+       WHERE va.volunteer_id = $1 AND p.status IN ('assigned','in_transit')
+       ORDER BY va.assigned_at DESC`, [req.user.id]);
     res.json(rows);
   });
 
