@@ -2,6 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { q } from '../db.js';
 import { auth } from '../middleware/auth.js';
+import { uploadImage } from '../services/s3Service.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -110,17 +111,20 @@ export default () => {
         result = fallbackFreshnessScore(req.file.path);
       }
 
-      // If a listing id was sent, attach the score to it
+      // Upload to Amazon S3 (or fallback to local disk)
+      const imageUrl = await uploadImage(req.file);
+
+      // If a listing id was sent, attach the score and image URL to it
       if (req.body.listingId) {
         await q(
           `UPDATE food_listings SET freshness_score=$1, freshness_label=$2, image_url=$3
            WHERE id=$4 AND donor_id=$5`,
-          [result.score, result.label, `/uploads/${req.file.filename}`, req.body.listingId, req.user.id]);
+          [result.score, result.label, imageUrl, req.body.listingId, req.user.id]);
       }
 
       res.json({
         ...result,
-        imageUrl: `/uploads/${req.file.filename}`,
+        imageUrl,
       });
     } catch (e) {
       res.status(500).json({ error: 'Failed to analyze image' });

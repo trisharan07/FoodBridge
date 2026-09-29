@@ -429,8 +429,9 @@ FoodBridge/
 - [x] **AI Freshness Scoring**: Image analysis pipeline and visual status gauges.
 - [x] **MobileNet Python Microservice**: Standalone classification microservice (`ml-service/`).
 - [x] **Turn-by-Turn Route Optimization**: OSRM (Open Source Routing Machine) waypoint routing.
-- [x] **Push Notifications**: WebPush (VAPID/ServiceWorker) & SMS integration for immediate volunteer alerts.
-- [ ] **Cloud Deployment**: AWS ECS / EC2 container deployment with Amazon RDS PostgreSQL & S3 bucket assets.
+- [x] **Cloud Deployment**: AWS ECS / EC2 container deployment with Amazon RDS PostgreSQL & S3 bucket assets.
+- [ ] **Continuous Integration (CI/CD)**: GitHub Actions workflow for automated testing & ECR build triggers.
+
 
 
 ---
